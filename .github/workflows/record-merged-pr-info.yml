@@ -1,0 +1,74 @@
+name: Record merged PR information
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  lead-time:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: checkout branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: create data
+        run: |
+          gh api graphql -f id="${{ github.event.pull_request.node_id }}" -f query='
+            query ($id: ID!) {
+              node(id: $id) {
+                ... on PullRequest {
+                  repository {
+                    name
+                  }
+                  title
+                  author {
+                    login
+                  }
+                  url
+                  baseRefName
+                  headRefName
+                  commits(first: 1) {
+                    nodes {
+                      commit {
+                        authoredDate
+                      }
+                    }
+                  }
+                  createdAt
+                  mergedAt
+                  additions
+                  deletions
+                  reviews(first: 1) {
+                    nodes {
+                      ... on PullRequestReview {
+                        createdAt
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ' | jq -r '.data.node | [.repository.name, .title, .author.login, .url, .baseRefName, .headRefName, .commits.nodes[0].commit.authoredDate, .createdAt, .reviews.nodes[0].createdAt, .mergedAt, .additions, .deletions]|@csv' |
+          xargs -I{} echo PR_INFO={} >> $GITHUB_ENV
+      - name: checkout wiki
+        uses: actions/checkout@v4
+        with:
+          repository: "${{ github.repository }}.wiki"
+          path: .wiki
+      - name: Update wiki pages
+        run: |
+          if [ ! -e .wiki/pr_info.md ]; then
+            echo -e "repository,title,user,url,base,head,firstCommittedAt,createdAt,firstReviewedAt,mergedAt,additions,deletions\n" > .wiki/pr_info.md
+          fi
+          echo -e "$PR_INFO\n" >> .wiki/pr_info.md
+      - name: Commit wiki pages
+        working-directory: .wiki
+        run: |
+          git add pr_info.md
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git commit -m "Update PR info wiki"
+          git push
